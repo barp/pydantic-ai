@@ -23,7 +23,6 @@ from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
     ModelResponse,
-    OutputPart,
     RetryPromptPart,
     SystemPromptPart,
     TextPart,
@@ -1731,7 +1730,9 @@ async def test_openai_json_schema_output(allow_model_requests: None, openai_api_
                 ]
             ),
             ModelResponse(
-                parts=[ToolCallPart(tool_name='get_user_country', args='{}', tool_call_id=IsStr())],
+                parts=[
+                    ToolCallPart(tool_name='get_user_country', args='{}', tool_call_id='call_PkRGedQNRFUzJp2R7dO7avWR')
+                ],
                 usage=Usage(
                     requests=1,
                     request_tokens=71,
@@ -1754,13 +1755,13 @@ async def test_openai_json_schema_output(allow_model_requests: None, openai_api_
                     ToolReturnPart(
                         tool_name='get_user_country',
                         content='Mexico',
-                        tool_call_id=IsStr(),
+                        tool_call_id='call_PkRGedQNRFUzJp2R7dO7avWR',
                         timestamp=IsDatetime(),
                     )
                 ]
             ),
             ModelResponse(
-                parts=[OutputPart(content='{"city":"Mexico City","country":"Mexico"}')],
+                parts=[TextPart(content='{"city":"Mexico City","country":"Mexico"}')],
                 usage=Usage(
                     requests=1,
                     request_tokens=92,
@@ -1810,7 +1811,9 @@ async def test_openai_manual_json_output(allow_model_requests: None, openai_api_
                 ]
             ),
             ModelResponse(
-                parts=[ToolCallPart(tool_name='get_user_country', args='{}', tool_call_id=IsStr())],
+                parts=[
+                    ToolCallPart(tool_name='get_user_country', args='{}', tool_call_id='call_uTjt2vMkeTr0GYqQyQYrUUhl')
+                ],
                 usage=Usage(
                     requests=1,
                     request_tokens=106,
@@ -1833,13 +1836,13 @@ async def test_openai_manual_json_output(allow_model_requests: None, openai_api_
                     ToolReturnPart(
                         tool_name='get_user_country',
                         content='Mexico',
-                        tool_call_id=IsStr(),
+                        tool_call_id='call_uTjt2vMkeTr0GYqQyQYrUUhl',
                         timestamp=IsDatetime(),
                     )
                 ]
             ),
             ModelResponse(
-                parts=[OutputPart(content='{"city":"Mexico City","country":"Mexico"}')],
+                parts=[TextPart(content='{"city":"Mexico City","country":"Mexico"}')],
                 usage=Usage(
                     requests=1,
                     request_tokens=127,
