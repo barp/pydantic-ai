@@ -28,7 +28,7 @@ class Prompt[InputT, OutputT](Node[Any, InputT, OutputT]):
     def __init__(
         self,
         input_type: type[InputT],
-        output_type: type[OutputT] | type[TypeUnion[OutputT]],
+        output_type: type[TypeUnion[OutputT]] | type[OutputT],
         prompt: str,
         model: models.Model | models.KnownModelName | str = 'openai:gpt-4o',
     ):

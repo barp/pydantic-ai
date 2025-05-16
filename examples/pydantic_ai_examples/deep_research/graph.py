@@ -138,6 +138,12 @@ class GraphBuilder[StateT, InputT, OutputT]:
     ) -> EdgeStart[StateT, NodeInputT, NodeOutputT]:
         raise NotImplementedError
 
+    def handle[SourceT](
+        self,
+        source: type[SourceT],
+    ) -> Edge[SourceT, StateT, object, SourceT]:
+        raise NotImplementedError
+
     def add_edges[T](
         self, start: EdgeStart[StateT, Any, T], edges_: Edges[T, OutputT]
     ) -> None:

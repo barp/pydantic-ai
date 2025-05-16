@@ -123,8 +123,8 @@ review_outline = Prompt(
 )
 
 
-def transform_proceed(ctx: TransformContext[object, MessageHistory, object]):
-    return GenerateOutlineInputs(chat=ctx.inputs, feedback=None)
+def transform_proceed(ctx: TransformContext[State, object, object]):
+    return GenerateOutlineInputs(chat=ctx.state.chat, feedback=None)
 
 
 def transform_clarify(ctx: TransformContext[object, object, Clarify]):
@@ -163,11 +163,11 @@ g = Graph.builder(
 )
 
 g.add_edges(
-    handle := g.start_edge(handle_user_message),
-    g.edges()
-    .branch(handle(Refuse).end())
-    .branch(handle(Proceed).transform(transform_proceed).route_to(generate_outline))
-    .branch(handle(Clarify).transform(transform_clarify).end()),
+    g.start_edge(handle_user_message),
+    edges()
+    .branch(g.handle(Refuse).end())
+    .branch(g.handle(Proceed).transform(transform_proceed).route_to(generate_outline))
+    .branch(g.handle(Clarify).transform(transform_clarify).end()),
 )
 
 
