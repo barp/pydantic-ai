@@ -24,7 +24,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from .graph import Graph, Interruption, TransformContext, edges
+from .graph import Graph, Interruption, TransformContext, decision
 from .nodes import Prompt, TypeUnion
 from .shared_types import MessageHistory, Outline
 
@@ -164,12 +164,27 @@ g = Graph.builder(
 
 g.add_edges(
     g.start_edge(handle_user_message),
-    edges()
+    decision()
     .branch(g.handle(Refuse).end())
     .branch(g.handle(Proceed).transform(transform_proceed).route_to(generate_outline))
     .branch(g.handle(Clarify).transform(transform_clarify).end()),
 )
 
+g.add_edges(
+    g.start_edge(handle_user_message),
+    decision().branch(g.handle(Refuse).end()).branch(g.handle_any().end())
+)
+
+
+g.add_edges(
+    g.start_edge(handle_user_message),
+    g.end()
+)
+
+
+
+
+g.join([], join_node)
 
 # g.edges(
 #     handle_user_message,

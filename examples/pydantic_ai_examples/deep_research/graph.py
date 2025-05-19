@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Never, Protocol, overload
+from typing import Any, Callable, Never, Protocol, overload, Sequence
 
 from .nodes import Node, NodeId, TypeUnion
 
@@ -99,17 +99,20 @@ class EdgeStart[GraphStateT, NodeInputT, NodeOutputT](Protocol):
         raise NotImplementedError
 
 
-class Edges[SourceT, EndT]:
+class Decision[SourceT, EndT]:
     _force_source_invariant: Callable[[SourceT], SourceT]
     _force_end_covariant: Callable[[], EndT]
 
     def branch[S, E, S2, E2](
-        self: Edges[S, E], edge: Edges[S2, E2]
-    ) -> Edges[S | S2, E | E2]:
+        self: Decision[S, E], edge: Decision[S2, E2]
+    ) -> Decision[S | S2, E | E2]:
+        raise NotImplementedError
+
+    def otherwise[E2](self, edge: Decision[Any, E2]) -> Decision[Any, EndT | E2]:
         raise NotImplementedError
 
 
-def edges() -> Edges[Never, Never]:
+def decision() -> Decision[Never, Never]:
     raise NotImplementedError
 
 
@@ -140,12 +143,19 @@ class GraphBuilder[StateT, InputT, OutputT]:
 
     def handle[SourceT](
         self,
-        source: type[SourceT],
+        source: type[TypeUnion[SourceT]] | type[SourceT],
+        # condition: Callable[[Any], bool] | None = None,
     ) -> Edge[SourceT, StateT, object, SourceT]:
         raise NotImplementedError
 
+    def handle_any(
+        self,
+        condition: Callable[[Any], bool] | None = None,
+    ) -> Edge[Any, StateT, object, Any]:
+        raise NotImplementedError
+
     def add_edges[T](
-        self, start: EdgeStart[StateT, Any, T], edges_: Edges[T, OutputT]
+        self, start: EdgeStart[StateT, Any, T], decision: Decision[T, OutputT]
     ) -> None:
         raise NotImplementedError
 
@@ -264,14 +274,19 @@ class Edge[SourceT, GraphStateT, EdgeInputT, EdgeOutputT]:
 
     def end(
         self,
-    ) -> Edges[SourceT, EdgeOutputT]:
+    ) -> Decision[SourceT, EdgeOutputT]:
         raise NotImplementedError
         # self._end = True
         # return self._source_type
 
     def route_to(
         self, node: Node[GraphStateT, EdgeOutputT, Any]
-    ) -> Edges[SourceT, Never]:
+    ) -> Decision[SourceT, Never]:
+        raise NotImplementedError
+
+    def route_to_parallel[T](
+        self: Edge[SourceT, GraphStateT, EdgeInputT, Sequence[T]], node: Node[GraphStateT, T, Any]
+    ) -> Decision[SourceT, Never]:
         raise NotImplementedError
 
     def transform[T](
