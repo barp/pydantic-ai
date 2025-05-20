@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any, NewType, cast, get_args, get_origin
 
 from pydantic import TypeAdapter
@@ -23,17 +24,15 @@ class TypeUnion[T]:
 
 @dataclass(init=False)
 class Prompt[InputT, OutputT](Node[Any, InputT, OutputT]):
-    agent: Agent[None, OutputT]
+    input_json_schema: type[InputT]
+    output_json_schema: type[TypeUnion[OutputT]] | type[OutputT]
+    prompt: str
+    model: models.Model | models.KnownModelName | str = 'openai:gpt-4o'
 
-    def __init__(
-        self,
-        input_type: type[InputT],
-        output_type: type[TypeUnion[OutputT]] | type[OutputT],
-        prompt: str,
-        model: models.Model | models.KnownModelName | str = 'openai:gpt-4o',
-    ):
+    @cached_property
+    def agent(self) -> Agent[None,  OutputT]:
         input_json_schema = to_json(
-            TypeAdapter(input_type).json_schema(), indent=2
+            TypeAdapter(self.input_type).json_schema(), indent=2
         ).decode()
         instructions = '\n'.join(
             [
@@ -41,13 +40,14 @@ class Prompt[InputT, OutputT](Node[Any, InputT, OutputT]):
                 input_json_schema,
                 '',
                 'Generate output based on the following instructions:',
-                prompt,
+                self.prompt,
             ]
         )
+        output_type = self.output_type
         if get_origin(output_type) is TypeUnion:
-            output_type = get_args(output_type)[0]
-        self.agent = Agent(
-            model=model,
+            output_type = get_args(self.output_type)[0]
+        return Agent(
+            model=self.model,
             output_type=cast(type[OutputT], output_type),
             instructions=instructions,
         )

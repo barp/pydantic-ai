@@ -170,6 +170,25 @@ g.add_edges(
     .branch(g.handle(Clarify).transform(transform_clarify).end()),
 )
 
+g.edge(
+    g.start_edge(node_1)
+    decision().branch(g.handle(Node1Output).transform(convert_to_Node2Input).route_to(node_2))
+)
+
+
+g.edge(
+    node_1.transform(convert_to_Node2Input),
+    node_2,
+)
+
+
+
+g.edge_with_transform(
+    node_1,
+    convert_to_Node2Input,
+    node_2,
+)
+
 g.add_edges(
     g.start_edge(handle_user_message),
     decision().branch(g.handle(Refuse).end()).branch(g.handle_any().end())
