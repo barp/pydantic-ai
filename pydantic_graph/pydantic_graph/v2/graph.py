@@ -1,38 +1,54 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any, Callable, Literal, Never, overload
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Never, overload
 
 from pydantic_graph.v2.decision import Decision
-from pydantic_graph.v2.fork import BroadcastFork, UnpackFork, get_broadcast_fork_id, get_root_fork_id, \
-    get_unpack_fork_id
+from pydantic_graph.v2.dominating_forks import DominatingFork, DominatingForkFinder
+from pydantic_graph.v2.fork import BroadcastFork, UnpackFork
 from pydantic_graph.v2.join import Join, Reducer
-from pydantic_graph.v2.node import NodeId
+from pydantic_graph.v2.node import (
+    END,
+    START,
+    AnyDestinationNode,
+    AnyNode,
+    AnySourceNode,
+    EndNode,
+    NodeId,
+    StartNode,
+    get_root_fork_id,
+    get_unpack_fork_id,
+    is_destination,
+    is_source,
+)
 from pydantic_graph.v2.step import Step, StepCallProtocol
 from pydantic_graph.v2.transform import TransformFunction
 from pydantic_graph.v2.util import get_callable_name, get_unique_string
 
-type Node = Step[Any, Any, Any] | Join[Any, Any, Any] | Decision[Any, Any] | BroadcastFork[Any, Any, Any] | UnpackFork[Any, Any, Any]
 
 @dataclass
 class Edge:
-    # Aliases intended to make it clearer where the types are
-    type SourceOutputT = Any
-    type DestinationInputT = Any
+    source_id: NodeId
+    transform: TransformFunction[Any, Any, Any, Any] | None
+    destination_id: NodeId
 
-    source: (
-        Literal['start'] | Step[Any, Any, SourceOutputT] | Join[Any, Any, SourceOutputT] | BroadcastFork[Any, Any, SourceOutputT] | UnpackFork[Any, Any, SourceOutputT]
-    )
-    transform: TransformFunction[Any, Any, SourceOutputT, DestinationInputT] | None
-    destination: (
-        Literal['end']
-        | Step[Any, DestinationInputT, Any]
-        | Join[Any, DestinationInputT, Any]
-        | BroadcastFork[Any, DestinationInputT, Any]
-        | UnpackFork[Any, DestinationInputT, Any]
-        | Decision[DestinationInputT, Any]
-    )
+    def source(self, nodes: dict[NodeId, AnyNode]) -> AnySourceNode:
+        node = nodes.get(self.source_id)
+        if node is None:
+            raise ValueError(f'Node {self.source_id} not found in graph')
+        if not is_source(node):
+            raise ValueError(f'Node {self.source_id} is not a source node: {node}')
+        return node
+
+    def destination(self, nodes: dict[NodeId, AnyNode]) -> AnyDestinationNode:
+        node = nodes.get(self.source_id)
+        if node is None:
+            raise ValueError(f'Node {self.source_id} not found in graph')
+        if not is_destination(node):
+            raise ValueError(f'Node {self.source_id} is not a source node: {node}')
+        return node
 
 
 class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
@@ -40,19 +56,21 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
     input_type: type[GraphInputT]
     output_type: type[GraphOutputT]
 
-    _nodes: dict[NodeId, Node]
-    _edges_by_source: dict[Literal['start'] | NodeId, list[Edge]]
-    _edges_by_destination: dict[Literal['end'] | NodeId, list[Edge]]
+    _nodes: dict[NodeId, AnyNode]
+    _edges_by_source: dict[NodeId, list[Edge]]
+    _edges_by_destination: dict[NodeId, list[Edge]]
 
+    type Source[OutputT] = Step[StateT, Any, OutputT] | Join[StateT, Any, OutputT]
     type SourceWithInputs[InputT, OutputT] = Step[StateT, InputT, OutputT] | Join[StateT, InputT, OutputT]
-    type Source[T] = Step[StateT, Any, T] | Join[StateT, Any, T]
-    type Destination[T] = Step[StateT, T, Any] | Join[StateT, T, Any] | Decision[T, GraphOutputT]
+    type Destination[InputT] = Step[StateT, InputT, Any] | Join[StateT, InputT, Any] | Decision[InputT, GraphOutputT]
 
     # Node building:
     def build_step[InputT, OutputT](
         self, call: StepCallProtocol[StateT, InputT, OutputT]
     ) -> Step[StateT, InputT, OutputT]:
-        return Step[StateT, InputT, OutputT](id=NodeId(f'step-{get_callable_name(call)}-{get_unique_string()}'), call=call)
+        return Step[StateT, InputT, OutputT](
+            id=NodeId(f'step-{get_callable_name(call)}-{get_unique_string()}'), call=call
+        )
 
     def build_join[InputT, OutputT](
         self, reducer_factory: Callable[[StateT, InputT], Reducer[StateT, InputT, OutputT]]
@@ -75,6 +93,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
     # You typically don't manually create forks — they are inferred from multiple edges coming out of a single node.
     @overload
     def start_with(self, destination: Destination[GraphInputT]) -> None: ...
+
     @overload
     def start_with[DestinationInputT](
         self,
@@ -82,18 +101,17 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         transform: TransformFunction[StateT, GraphInputT, GraphInputT, DestinationInputT],
     ) -> None: ...
+
     def start_with(
         self,
         destination: Destination[Any],
         *,
         transform: TransformFunction[StateT, Any, Any, Any] | None = None,
     ) -> None:
-        self._add_edge(
-            Edge(
-                source='start',
-                transform=transform,
-                destination=destination,
-            )
+        self._add_edge_from_nodes(
+            source=START,
+            transform=transform,
+            destination=destination,
         )
 
     @overload
@@ -101,6 +119,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         self: GraphBuilder[StateT, Sequence[GraphInputItemT], GraphOutputT],
         node: Destination[GraphInputItemT],
     ) -> None: ...
+
     @overload
     def start_with_unpack[DestinationInputT](
         self,
@@ -108,6 +127,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         pre_unpack_transform: TransformFunction[StateT, GraphInputT, GraphInputT, Sequence[DestinationInputT]],
     ) -> None: ...
+
     @overload
     def start_with_unpack[GraphInputItemT, DestinationInputT](
         self: GraphBuilder[StateT, Sequence[GraphInputItemT], GraphOutputT],
@@ -115,6 +135,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         post_unpack_transform: TransformFunction[StateT, Sequence[GraphInputItemT], GraphInputItemT, DestinationInputT],
     ) -> None: ...
+
     @overload
     def start_with_unpack[IntermediateT, DestinationInputT](
         self: GraphBuilder[StateT, GraphInputT, GraphOutputT],
@@ -123,6 +144,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         pre_unpack_transform: TransformFunction[StateT, GraphInputT, GraphInputT, Sequence[IntermediateT]],
         post_unpack_transform: TransformFunction[StateT, GraphInputT, IntermediateT, DestinationInputT],
     ) -> None: ...
+
     def start_with_unpack(
         self,
         node: Destination[Any],
@@ -133,24 +155,21 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         # TODO: Accept an optional node_id, necessary for persistence
         #   Probably should require all nodes have a manually-specified unique ID or persistence will break..
         #   If so, might need to make forks a manually-created thing, rather than auto-created
-        fork = UnpackFork[Any, Any, Any](id=get_unpack_fork_id('start', node))
-        self._add_edge(
-            Edge(
-                source='start',
-                transform=pre_unpack_transform,
-                destination=fork,
-            )
+        fork = UnpackFork[Any, Any, Any](id=get_unpack_fork_id(START, node))
+        self._add_edge_from_nodes(
+            source=START,
+            transform=pre_unpack_transform,
+            destination=fork,
         )
-        self._add_edge(
-            Edge(
-                source=fork,
-                transform=post_unpack_transform,
-                destination=node,
-            )
+        self._add_edge_from_nodes(
+            source=fork,
+            transform=post_unpack_transform,
+            destination=node,
         )
 
     @overload
     def edge[SourceOutputT](self, source: Source[SourceOutputT], destination: Destination[SourceOutputT]) -> None: ...
+
     @overload
     def edge[SourceInputT, SourceOutputT, DestinationInputT](
         self,
@@ -159,6 +178,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         transform: TransformFunction[StateT, SourceInputT, SourceOutputT, DestinationInputT],
     ) -> None: ...
+
     def edge(
         self,
         source: Source[Any],
@@ -166,12 +186,10 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         transform: TransformFunction[Any, Any, Any, Any] | None = None,
     ) -> None:
-        self._add_edge(
-            Edge(
-                source=source,
-                transform=transform,
-                destination=destination,
-            )
+        self._add_edge_from_nodes(
+            source=source,
+            transform=transform,
+            destination=destination,
         )
 
     @overload
@@ -180,6 +198,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         source: SourceWithInputs[SourceInputT, Sequence[DestinationInputT]],
         destination: Destination[DestinationInputT],
     ) -> None: ...
+
     @overload
     def edge_unpack[SourceInputT, SourceOutputT, DestinationInputT](
         self,
@@ -188,6 +207,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         pre_unpack_transform: TransformFunction[StateT, SourceInputT, SourceOutputT, Sequence[DestinationInputT]],
     ) -> None: ...
+
     @overload
     def edge_unpack[SourceInputT, SourceOutputItemT, DestinationInputT](
         self,
@@ -201,6 +221,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
             DestinationInputT,
         ],
     ) -> None: ...
+
     @overload
     def edge_unpack[SourceInputT, SourceOutputT, IntermediateT, DestinationInputT](
         self,
@@ -210,6 +231,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         pre_unpack_transform: TransformFunction[StateT, SourceInputT, SourceOutputT, Sequence[IntermediateT]],
         post_unpack_transform: TransformFunction[StateT, SourceInputT, IntermediateT, DestinationInputT],
     ) -> None: ...
+
     def edge_unpack[SourceInputT](
         self,
         source: SourceWithInputs[SourceInputT, Any],
@@ -221,23 +243,20 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         fork = UnpackFork[Any, Any, Any](
             id=get_unpack_fork_id(source, destination),
         )
-        self._add_edge(
-            Edge(
-                source=source,
-                transform=pre_unpack_transform,
-                destination=fork,
-            )
+        self._add_edge_from_nodes(
+            source=source,
+            transform=pre_unpack_transform,
+            destination=fork,
         )
-        self._add_edge(
-            Edge(
-                source=fork,
-                transform=post_unpack_transform,
-                destination=destination,
-            )
+        self._add_edge_from_nodes(
+            source=fork,
+            transform=post_unpack_transform,
+            destination=destination,
         )
 
     @overload
     def end_from(self, source: Source[GraphOutputT]) -> None: ...
+
     @overload
     def end_from[SourceInputT, SourceOutputT](
         self,
@@ -245,114 +264,143 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         *,
         transform: TransformFunction[StateT, SourceInputT, SourceOutputT, GraphOutputT],
     ) -> None: ...
+
     def end_from(
         self,
         source: Source[Any],
         *,
         transform: TransformFunction[StateT, Any, Any, GraphOutputT] | None = None,
     ) -> None:
-        self._add_edge(
-            Edge(
-                source=source,
-                transform=transform,
-                destination='end',
-            )
+        self._add_edge_from_nodes(
+            source=source,
+            transform=transform,
+            destination=END,
         )
 
+    def _add_edge_from_nodes(
+        self,
+        *,
+        source: AnySourceNode,
+        transform: TransformFunction[Any, Any, Any, Any] | None,
+        destination: AnyDestinationNode,
+    ) -> None:
+        self._add_node(source)
+        self._add_node(destination)
+
+        edge = Edge(source_id=source.id, transform=transform, destination_id=destination.id)
+        self._add_edge(edge)
+
+    def _add_node(self, node: AnyNode) -> None:
+        existing = self._nodes.get(node.id)
+        if existing is None or isinstance(existing, (StartNode, EndNode)):
+            pass  # it's not a problem to have non-unique instances of StartNode and EndNode
+        elif existing is not node:
+            raise ValueError(f'All nodes must have unique node IDs. {node.id!r} was the ID for {existing} and {node}')
+
+        self._nodes[node.id] = node
+
     def _add_edge(self, edge: Edge) -> None:
-        # Store the edge, and validate and store its nodes
-        if edge.source == 'start':
-            self._edges_by_source['start'].append(edge)
-        else:
-            self._edges_by_source[edge.source.id].append(edge)
-            self._validate_and_store_node(edge.source.id, edge.source)
-
-        if edge.destination == 'end':
-            self._edges_by_destination['end'].append(edge)
-        else:
-            self._edges_by_destination[edge.destination.id].append(edge)
-            self._validate_and_store_node(edge.destination.id, edge.destination)
-
-    def _validate_and_store_node(self, id: NodeId, node: Any) -> None:
-        existing = self._nodes.get(id)
-        if existing is not None and existing is not node:
-            raise ValueError(
-                f'All nodes must have unique node IDs. {id!r} was the ID for {existing} and {node}'
-            )
-        self._nodes[id] = node
-
-    def _forkify_edges(self):
-        for source_id, edges in list(self._edges_by_source.items()):  # copy the .items() to avoid modifying the dict while iterating
-            source: Node | Literal['start'] = 'start' if source_id == 'start' else self._nodes[source_id]
-            if isinstance(source, BroadcastFork):
-                continue  # Broadcast forks are the only nodes that are allowed to be the source of multiple edges
-
-            if len(edges) > 1:
-                root_fork_id = get_broadcast_fork_id(source)
-                root_fork: Fork[Any, Any, Any] | None = next((x for x in edges if isinstance(x, Fork) and x.id == root_fork_id and x.mode == 'broadcast'), None)
-                if root_fork is None:
-                    root_fork = Fork[Any, Any, Any](id=root_fork_id, mode='broadcast')
-
-                for start_edge in edges:
-                    if start_edge.destination == root_fork:
-                        continue
-                    if isinstance(start_edge.destination, Fork) and start_edge.destination.mode == 'broadcast':
-                        # Move the edges from this fork to the root fork, and delete this fork
-                        redundant_fork = start_edge.destination
-                        for edge in self._edges_by_source_id[start_edge.destination.id]:
-                            self._add_edge(Edge(source=root_fork, transform=edge.transform, destination=edge.destination))
-                        self._edges_by_source_id.pop(start_edge.destination.id)
-                        self._nodes.pop(start_edge.destination.id)
-
-                        raise NotImplementedError
-                    elif start_edge.destination == 'end':
-                        raise NotImplementedError
-                    else:
-                        destination_id = start_edge.destination.id
-                        # rewire these edges to start at start_fork
-                        for edge in self._edges_by_source_id[destination_id]:
-                            self._add_edge(Edge(source=root_fork, transform=edge.transform, destination=edge.destination))
-                        # replace the old edges with one that goes to the source
-
-                self._edges_by_source_id[source_id] = [Edge(source='start', transform=None, destination=root_fork)]
-
-        # Forkify the remaining nodes:
-        for source_id, edges in self._edges_by_source_id.items():
-            if len(edges) > 1:
-                fork = Fork[Any, Any, Any](id=NodeId(f'fork-{source_id}'), mode='broadcast')
-                for edge in edges:
-                    self._add_edge(Edge(source=fork, transform=edge.transform, destination=edge.destination))
-                self._edges_by_source_id[source_id] = [Edge(source=source_id, transform=None, destination=fork)]
-
-
-
-
+        assert edge.source_id in self._nodes, f'Edge source {edge.source_id} not found in graph'
+        assert edge.destination_id in self._nodes, f'Edge destination {edge.destination_id} not found in graph'
+        self._edges_by_source[edge.source_id].append(edge)
+        self._edges_by_destination[edge.destination_id].append(edge)
 
     def build(self) -> Graph[StateT, GraphInputT, GraphOutputT]:
-        """
-        Need to do the following:
+        """Need to do the following:
         * Warn/error if the graph is not connected
         * Error if the graph does not meet the every-join-has-a-source-fork requirement (otherwise can't know when to proceed past joins)
         * Generate forks for sources with multiple edges
         """
+        nodes, edges_by_source = self._build_broadcast_forks()
+        dominating_forks = _collect_dominating_forks(nodes, edges_by_source)
+
+        return Graph[StateT, GraphInputT, GraphOutputT](
+            # deps_type=self.deps_type,
+            state_type=self.state_type,
+            input_type=self.input_type,
+            output_type=self.output_type,
+            nodes=nodes,
+            edges_by_source=edges_by_source,
+            dominating_forks=dominating_forks,
+        )
+
+    def _build_broadcast_forks(self) -> tuple[dict[NodeId, AnyNode], dict[NodeId, list[Edge]]]:
+        # Make copies of nodes and edges_by_source before we make modifications:
+        nodes = dict(self._nodes)
+        edges_by_source: dict[NodeId, list[Edge]] = defaultdict(list)
+        for k, v in self._edges_by_source.items():
+            edges_by_source[k] = list(v)  # copy the list to prevent modifications
+
+        initial_nodes = list(nodes.items())  # copy the nodes items to prevent modification during iteration
+        for source_id, source in initial_nodes:
+            if isinstance(source, BroadcastFork):
+                continue  # Broadcast forks are the only nodes that are allowed to be the source of multiple edges
+
+            edges_from_source = edges_by_source.get(source_id, [])
+            if len(edges_from_source) <= 1:
+                continue  # no need to insert a broadcast fork between this node and its destinations
+
+            # Create the "root fork" for this source
+            root_fork = BroadcastFork[Any, Any, Any](id=get_root_fork_id(source))
+            nodes[root_fork.id] = root_fork
+
+            for e in edges_from_source:
+                assert not isinstance(e.destination, BroadcastFork), (
+                    'Broadcast forks should only be created while building the graph; this is a bug.'
+                )
+                edges_by_source[root_fork.id].append(replace(e, source_id=root_fork.id))
+            edges_by_source[source_id] = [Edge(source_id=source.id, transform=None, destination_id=root_fork_id)]
+        return nodes, edges_by_source
 
 
-        raise NotImplementedError
+def _collect_dominating_forks(
+    graph_nodes: dict[NodeId, AnyNode], graph_edges_by_source: dict[NodeId, list[Edge]]
+) -> dict[NodeId, DominatingFork[NodeId]]:
+    nodes = set(graph_nodes)
+    start_ids = {StartNode.start.id}
+    fork_ids = {node_id for node_id, node in graph_nodes.items() if isinstance(node, (BroadcastFork, UnpackFork))}
+    edges = {source_id: [e.destination_id for e in edges] for source_id, edges in graph_edges_by_source.items()}
+    join_ids = {
+        node_id
+        for node_id, node in graph_nodes.items()
+        if isinstance(node, Join) and node.id not in start_ids and node.id not in fork_ids
+    }
+    finder = DominatingForkFinder(
+        nodes=nodes,
+        start_ids=start_ids,
+        fork_ids=fork_ids,
+        edges=edges,
+    )
+    join_parents: dict[NodeId, DominatingFork[NodeId]] = {}
 
-        # return Graph[StateT, GraphInputT, GraphOutputT](
-        #     state_type=self.state_type,
-        #     deps_type=None,
-        #     input_type=self.input_type,
-        #     output_type=self.output_type,
-        # )
+    for join_id in join_ids:
+        dominating_fork = finder.find_dominating_fork(join_id)
+        if dominating_fork is None:
+            # TODO: Print out the mermaid graph and explain the problem
+            raise ValueError(f'Join node {join_id} has no dominating fork')
+        join_parents[join_id] = dominating_fork
+
+    return join_parents
 
 
+@dataclass
 class Graph[StateT, InputT, OutputT]:
+    # deps_type: type[Any]
     state_type: type[StateT]
-    deps_type: type[Any]
     input_type: type[InputT]
     output_type: type[OutputT]
 
+    nodes: dict[NodeId, AnyNode]
+    edges_by_source: dict[NodeId, list[Edge]]
+    dominating_forks: dict[NodeId, DominatingFork[NodeId]]  # mapping from join node to the dominating fork
+
+    def __post_init__(self):
+        for join_id, dominating_fork in self.dominating_forks.items():
+            join_node = self.nodes.get(join_id)
+            fork_id = dominating_fork.fork_id
+            fork_node = self.nodes.get(fork_id)
+            assert isinstance(join_node, Join), f'Node {join_id} is not a Join node: {join_node}'
+            assert isinstance(fork_node, (BroadcastFork, UnpackFork)), f'Node {fork_id} is not a Fork node: {fork_node}'
+
     # nodes: Sequence[Node]
     # edges: Sequence[Edge]
-

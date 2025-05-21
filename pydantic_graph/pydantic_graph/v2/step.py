@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from pydantic_graph.v2.node import NodeId
+from pydantic_graph.v2.id_types import NodeId
 
 
 # TODO: Should StepContext be passed to joins/forks/decisions? Like, unified with ReducerContext etc.?

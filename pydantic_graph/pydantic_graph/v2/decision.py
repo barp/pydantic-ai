@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Callable
 
-from pydantic_graph.v2.node import NodeId
-
+from pydantic_graph.v2.id_types import NodeId
 
 # TODO: Need to add DecisionBranch class here
+
 
 class Decision[SourceT, EndT]:
     id: NodeId
@@ -22,5 +22,3 @@ class Decision[SourceT, EndT]:
 
     def otherwise[E2](self, edge: Decision[Any, E2]) -> Decision[Any, EndT | E2]:
         raise NotImplementedError
-
-

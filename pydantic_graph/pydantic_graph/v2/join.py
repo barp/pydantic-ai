@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from pydantic_graph.v2.node import NodeId
+from pydantic_graph.v2.id_types import NodeId
 
 
 class ReducerContext:
