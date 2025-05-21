@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Never, Protocol, overload, Sequence
+from typing import Any, Callable, Never, Protocol, overload
 
 from .nodes import Node, NodeId, TypeUnion
 
@@ -95,7 +95,7 @@ class EdgeStart[GraphStateT, NodeInputT, NodeOutputT](Protocol):
     @staticmethod
     def __call__[SourceT](
         source: type[SourceT],
-    ) -> Edge[SourceT, GraphStateT, NodeInputT, SourceT]:
+    ) -> DecisionBranch[SourceT, GraphStateT, NodeInputT, SourceT]:
         raise NotImplementedError
 
 
@@ -145,13 +145,13 @@ class GraphBuilder[StateT, InputT, OutputT]:
         self,
         source: type[TypeUnion[SourceT]] | type[SourceT],
         # condition: Callable[[Any], bool] | None = None,
-    ) -> Edge[SourceT, StateT, object, SourceT]:
+    ) -> DecisionBranch[SourceT, StateT, object, SourceT]:
         raise NotImplementedError
 
     def handle_any(
         self,
         condition: Callable[[Any], bool] | None = None,
-    ) -> Edge[Any, StateT, object, Any]:
+    ) -> DecisionBranch[Any, StateT, object, Any]:
         raise NotImplementedError
 
     def add_edges[T](
@@ -260,7 +260,7 @@ type TransformFunction[StateT, SourceInputT, SourceOutputT, DestinationInputT] =
 
 
 @dataclass
-class Edge[SourceT, GraphStateT, EdgeInputT, EdgeOutputT]:
+class DecisionBranch[SourceT, GraphStateT, EdgeInputT, EdgeOutputT]:
     _source_type: type[SourceT]
     _is_instance: Callable[[Any], bool]
     _transforms: tuple[TransformFunction[GraphStateT, EdgeInputT, Any, Any], ...] = (
@@ -285,16 +285,17 @@ class Edge[SourceT, GraphStateT, EdgeInputT, EdgeOutputT]:
         raise NotImplementedError
 
     def route_to_parallel[T](
-        self: Edge[SourceT, GraphStateT, EdgeInputT, Sequence[T]], node: Node[GraphStateT, T, Any]
+        self: DecisionBranch[SourceT, GraphStateT, EdgeInputT, Sequence[T]],
+        node: Node[GraphStateT, T, Any],
     ) -> Decision[SourceT, Never]:
         raise NotImplementedError
 
     def transform[T](
         self,
         call: _Transform[GraphStateT, EdgeInputT, EdgeOutputT, T],
-    ) -> Edge[SourceT, GraphStateT, EdgeInputT, T]:
+    ) -> DecisionBranch[SourceT, GraphStateT, EdgeInputT, T]:
         new_transforms = self._transforms + (call,)
-        return Edge(self._source_type, self._is_instance, new_transforms)
+        return DecisionBranch(self._source_type, self._is_instance, new_transforms)
 
     # def handle_parallel[HandleOutputItemT, T, S](
     #     self: Edge[

@@ -24,13 +24,13 @@ class TypeUnion[T]:
 
 @dataclass(init=False)
 class Prompt[InputT, OutputT](Node[Any, InputT, OutputT]):
-    input_json_schema: type[InputT]
-    output_json_schema: type[TypeUnion[OutputT]] | type[OutputT]
+    input_type: type[InputT]
+    output_type: type[TypeUnion[OutputT]] | type[OutputT]
     prompt: str
     model: models.Model | models.KnownModelName | str = 'openai:gpt-4o'
 
     @cached_property
-    def agent(self) -> Agent[None,  OutputT]:
+    def agent(self) -> Agent[None, OutputT]:
         input_json_schema = to_json(
             TypeAdapter(self.input_type).json_schema(), indent=2
         ).decode()

@@ -908,7 +908,7 @@ async def _run_task_and_evaluators(
             span_id = f'{context.span_id:016x}'
         fallback_duration = time.time() - t0
 
-    return ReportCase(
+    return ReportCase[InputsT, OutputT, MetadataT](
         name=report_case_name,
         inputs=case.inputs,
         metadata=case.metadata,
