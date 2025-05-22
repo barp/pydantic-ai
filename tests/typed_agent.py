@@ -245,3 +245,15 @@ if not MYPY:
 partial_agent: Agent[MyDeps] = Agent(deps_type=MyDeps)
 assert_type(partial_agent, Agent[MyDeps, str])
 assert_type(partial_agent, Agent[MyDeps])
+
+
+class MyOutput(BaseModel):
+    pass
+
+
+def my_output() -> int:
+    raise NotImplementedError
+
+
+agent = Agent(output_type=[MyOutput, my_output, ToolOutput(type_=bool)])
+assert_type(agent, Agent[None, Union[MyOutput, int, bool]])

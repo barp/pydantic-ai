@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
+from functools import cached_property
 from typing import Any, Callable, Never, overload
 
 from pydantic_graph.v2.decision import Decision
 from pydantic_graph.v2.dominating_forks import DominatingFork, DominatingForkFinder
 from pydantic_graph.v2.fork import BroadcastFork, UnpackFork
+from pydantic_graph.v2.id_types import WalkerId, NodeRunId
 from pydantic_graph.v2.join import Join, Reducer
 from pydantic_graph.v2.node import (
     END,
@@ -18,13 +20,13 @@ from pydantic_graph.v2.node import (
     EndNode,
     NodeId,
     StartNode,
+    get_default_unpack_fork_id,
     get_root_fork_id,
-    get_unpack_fork_id,
     is_destination,
     is_source,
 )
 from pydantic_graph.v2.step import Step, StepCallProtocol
-from pydantic_graph.v2.transform import TransformFunction
+from pydantic_graph.v2.transform import TransformFunction, TransformContext
 from pydantic_graph.v2.util import get_callable_name, get_unique_string
 
 
@@ -155,7 +157,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         # TODO: Accept an optional node_id, necessary for persistence
         #   Probably should require all nodes have a manually-specified unique ID or persistence will break..
         #   If so, might need to make forks a manually-created thing, rather than auto-created
-        fork = UnpackFork[Any, Any, Any](id=get_unpack_fork_id(START, node))
+        fork = UnpackFork[Any, Any, Any](id=get_default_unpack_fork_id(START, node))
         self._add_edge_from_nodes(
             source=START,
             transform=pre_unpack_transform,
@@ -241,7 +243,7 @@ class GraphBuilder[StateT, GraphInputT, GraphOutputT]:
         post_unpack_transform: TransformFunction[StateT, SourceInputT, Any, Any] | None = None,
     ) -> None:
         fork = UnpackFork[Any, Any, Any](
-            id=get_unpack_fork_id(source, destination),
+            id=get_default_unpack_fork_id(source, destination),
         )
         self._add_edge_from_nodes(
             source=source,
@@ -394,6 +396,14 @@ class Graph[StateT, InputT, OutputT]:
     edges_by_source: dict[NodeId, list[Edge]]
     dominating_forks: dict[NodeId, DominatingFork[NodeId]]  # mapping from join node to the dominating fork
 
+    @cached_property
+    def start_edge(self) -> Edge:
+        start_edges = self.edges_by_source.get(START.id, [])
+        assert len(start_edges) == 1, f'Graphs must have exactly one start edge; got {start_edges}'
+        # Note: the way to handle multiple "start edges" is to create a broadcast fork. This should be done when
+        # building the graph. Note that the reason we need an explicit broadcast fork is to
+        return start_edges[0]
+
     def __post_init__(self):
         for join_id, dominating_fork in self.dominating_forks.items():
             join_node = self.nodes.get(join_id)
@@ -402,5 +412,46 @@ class Graph[StateT, InputT, OutputT]:
             assert isinstance(join_node, Join), f'Node {join_id} is not a Join node: {join_node}'
             assert isinstance(fork_node, (BroadcastFork, UnpackFork)), f'Node {fork_id} is not a Fork node: {fork_node}'
 
-    # nodes: Sequence[Node]
-    # edges: Sequence[Edge]
+        # Eagerly compute the start edge to raise an error if it doesn't exist
+        # We could probably drop this if we are confident there aren't bugs in the implementation; I've added it
+        # to help with debugging while working on the implementation
+        assert self.start_edge
+
+
+
+@dataclass
+class GraphWalkerState:
+    id: WalkerId
+
+    # With our current BaseNode thing, next_node_id and next_node_inputs are merged into `next_node` itself
+    next_node_id: NodeId
+    next_node_inputs: Any
+    fork_stack: list[tuple[NodeId, NodeRunId]]  # stack of forks that have been entered; used so that the GraphRunner can decide when to proceed through joins
+
+
+@dataclass
+class GraphRun[StateT, InputT, OutputT]:
+    graph: Graph[StateT, InputT, OutputT]
+    state: StateT
+    inputs: InputT
+
+    # persistence: Any  # TODO: Implement this
+    walkers: dict[WalkerId, GraphWalkerState]  # mapping from node ID to the walker for that node
+    result: Any | None = None  # Note: should probably use a monad (i.e., `Maybe`) for this to distinguish between "no result" and "None is the result"
+
+    def run(self) -> None:
+        start_edge = self.graph.start_edge
+
+        next_node_inputs = self.inputs
+        if edge.transform is not None:
+            ctx = TransformContext(self.state, self.inputs, self.inputs)
+            next_node_inputs = edge.transform(ctx)
+
+        new_walker = GraphWalkerState(
+            id=WalkerId(f'walker-{get_unique_string()}'),
+            next_node_id=edge.destination_id,
+            next_node_inputs=next_node_inputs,
+            fork_stack=[],
+        )
+        transformed_input = edge.transform(self.state, self.inputs) if edge.transform else self.inputs
+
