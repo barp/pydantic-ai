@@ -6,9 +6,9 @@ from typing import Any
 from typing_extensions import TypeGuard
 
 from pydantic_graph.v2.decision import Decision
-from pydantic_graph.v2.fork import BroadcastFork, UnpackFork
 from pydantic_graph.v2.id_types import NodeId
 from pydantic_graph.v2.join import Join
+from pydantic_graph.v2.spread import Spread
 from pydantic_graph.v2.step import Step
 
 
@@ -31,39 +31,18 @@ class EndNode(str, Enum):
 START = StartNode.start
 END = EndNode.end
 
-type AnyNode = (
-    StartNode
-    | EndNode
-    | Step[Any, Any, Any]
-    | Join[Any, Any, Any]
-    | Decision[Any, Any]
-    | BroadcastFork[Any, Any, Any]
-    | UnpackFork[Any, Any, Any]
-)
-type AnySourceNode = (
-    StartNode | Step[Any, Any, Any] | Join[Any, Any, Any] | BroadcastFork[Any, Any, Any] | UnpackFork[Any, Any, Any]
-)
-type AnyDestinationNode = (
-    EndNode
-    | Step[Any, Any, Any]
-    | Join[Any, Any, Any]
-    | Decision[Any, Any]
-    | BroadcastFork[Any, Any, Any]
-    | UnpackFork[Any, Any, Any]
-)
+type AnyMiddleNode = Step[Any, Any, Any] | Join[Any, Any, Any] | Spread[Any, Any, Any]
+type AnySourceNode = AnyMiddleNode | StartNode
+type AnyDestinationNode = AnyMiddleNode | EndNode | Decision[Any, Any]
+type AnyNode = AnySourceNode | AnyDestinationNode
 
 
 def is_source(node: AnyNode) -> TypeGuard[AnySourceNode]:
-    return isinstance(node, (StartNode, Step, Join, BroadcastFork, UnpackFork))
+    return isinstance(node, (StartNode, Step, Join))
 
 
 def is_destination(node: AnyNode) -> TypeGuard[AnyDestinationNode]:
-    return isinstance(node, (EndNode, Step, Join, BroadcastFork, UnpackFork, Decision))
+    return isinstance(node, (EndNode, Step, Join, Decision))
 
-
-def get_root_fork_id(source: AnyNode) -> NodeId:
-    return NodeId(f'__root-broadcast-fork__:{source.id}')
-
-
-def get_default_unpack_fork_id(source: AnySourceNode, destination: AnyDestinationNode) -> NodeId:
-    return NodeId(f'__unpack-fork__:{source.id}:{destination.id}')
+def get_default_spread_id(source: AnySourceNode, destination: AnyDestinationNode) -> NodeId:
+    return NodeId(f'__spread__:{source.id}:{destination.id}')
